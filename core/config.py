@@ -29,22 +29,33 @@ def get_config_value(config: dict[str, Any], path: str, default: Any = None) -> 
 
 
 def parse_artist_presets(raw_value: Any) -> list[ArtistPreset]:
+    """解析画师预设列表，兼容旧格式(list/dict)和 template_list 格式。"""
     if not isinstance(raw_value, list):
         return []
 
     presets: list[ArtistPreset] = []
     for index, item in enumerate(raw_value, start=1):
         if isinstance(item, dict):
+            # template_list 格式包含 __template_key，忽略该字段
             name = str(item.get("name") or f"画师串 {index}").strip()
             prompt = str(item.get("prompt") or "").strip()
+            negative_prompt = str(item.get("negative_prompt") or "").strip()
+            description = str(item.get("description") or "").strip()
         elif isinstance(item, str):
             name = f"画师串 {index}"
             prompt = item.strip()
+            negative_prompt = ""
+            description = ""
         else:
             continue
 
         if prompt:
-            presets.append(ArtistPreset(name=name, prompt=prompt))
+            presets.append(ArtistPreset(
+                name=name,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                description=description,
+            ))
     return presets
 
 
@@ -209,9 +220,20 @@ def resolve_model_config(
     presets = parse_artist_presets(
         get_config_value(config, f"{version_section}.artist_presets", [])
     )
+    # 版本预设为空时回退到全局预设
+    if not presets:
+        presets = parse_artist_presets(
+            get_config_value(config, "model.artist_presets", [])
+        )
     index = state.selected_artist_index or 1
     if presets and 1 <= index <= len(presets):
-        merged["nai_artist_prompt"] = presets[index - 1].prompt
+        selected = presets[index - 1]
+        merged["nai_artist_prompt"] = selected.prompt
+        if selected.negative_prompt:
+            existing_neg = str(merged.get("negative_prompt_add") or "").strip()
+            merged["negative_prompt_add"] = (
+                f"{existing_neg}, {selected.negative_prompt}" if existing_neg else selected.negative_prompt
+            )
 
     if is_nsfw_filter_enabled(config, session, states):
         filter_tags = str(
@@ -235,8 +257,8 @@ def build_help_text(config: dict[str, Any]) -> str:
     return "\n".join(
         [
             "📖 NAI 图片插件命令",
-            "/nai <描述>：自然语言生图",
-            "/nai0 <英文标签>：直接标签生图",
+            "/nai draw <描述>：自然语言生图",
+            "/nai tag <英文标签>：直接标签生图（兼容 /nai0）",
             "/nai help：查看帮助",
             "/nai set [模型代号]：查看或切换模型",
             "/nai art [编号]：查看或切换画师预设",

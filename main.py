@@ -66,50 +66,113 @@ class Main(Star):
     async def terminate(self) -> None:
         await self.nai_client.close()
 
-    @filter.command("nai")
-    async def nai(self, event: AstrMessageEvent) -> None:
-        """NovelAI 生图与管理命令。"""
+    # ── nai 命令组 ────────────────────────────────────────────
+
+    @filter.command_group("nai")
+    def nai_group(self):
+        """NovelAI 图片生成命令组。"""
+        pass
+
+    @nai_group.command("draw")
+    async def nai_draw(self, event: AstrMessageEvent) -> None:
+        """自然语言描述生图。"""
         session = SessionContext.from_event(event)
-        remainder = self._command_remainder(event.message_str)
+        request_text = self._subcommand_argument(event.message_str)
+        if not request_text:
+            await send_text_message(event, "用法：/nai draw <描述>")
+            return
+        await self._handle_draw(event, session, request_text)
 
-        if not remainder:
-            await send_text_message(event, build_help_text(self.config))
+    @nai_group.command("tag")
+    async def nai_tag(self, event: AstrMessageEvent) -> None:
+        """直接使用英文标签生图。"""
+        session = SessionContext.from_event(event)
+        if not can_use_generation(self.config, session, self.states):
+            await send_text_message(event, "❌ 当前会话启用了管理员模式，只有管理员可以使用生图命令。")
             return
+        tags = self._subcommand_argument(event.message_str)
+        if not tags:
+            await send_text_message(event, "用法：/nai tag 1girl, hatsune miku, smile")
+            return
+        success, result = await self.image_service.generate_and_send(event, session, tags)
+        if not success:
+            await send_text_message(event, f"❌ 生成失败：{result}")
 
-        command, argument = self._split_remainder(remainder)
-        if command == "help":
-            await send_text_message(event, build_help_text(self.config))
-            return
-        if command in {"on", "off"}:
-            await self._handle_recall_toggle(event, session, command == "on")
-            return
-        if command in {"st", "sp"}:
-            await self._handle_admin_mode(event, session, command == "st")
-            return
-        if command == "set":
-            await self._handle_model_switch(event, session, argument)
-            return
-        if command == "art":
-            await self._handle_artist_preset(event, session, argument)
-            return
-        if command == "size":
-            await self._handle_size_switch(event, session, argument)
-            return
-        if command == "pt":
-            await self._handle_prompt_show(event, session, argument)
-            return
-        if command == "nsfw":
-            await self._handle_nsfw(event, session, argument)
-            return
-        if command == "撤回":
-            await self._handle_recall_last(event, session)
-            return
+    @nai_group.command("help")
+    async def nai_help(self, event: AstrMessageEvent) -> None:
+        """查看帮助信息。"""
+        await send_text_message(event, build_help_text(self.config))
 
-        await self._handle_draw(event, session, remainder)
+    @nai_group.command("set")
+    async def nai_set(self, event: AstrMessageEvent) -> None:
+        """查看或切换模型。"""
+        session = SessionContext.from_event(event)
+        argument = self._subcommand_argument(event.message_str)
+        await self._handle_model_switch(event, session, argument)
+
+    @nai_group.command("art")
+    async def nai_art(self, event: AstrMessageEvent) -> None:
+        """查看或切换画师预设。"""
+        session = SessionContext.from_event(event)
+        argument = self._subcommand_argument(event.message_str)
+        await self._handle_artist_preset(event, session, argument)
+
+    @nai_group.command("size")
+    async def nai_size(self, event: AstrMessageEvent) -> None:
+        """查看或切换尺寸。"""
+        session = SessionContext.from_event(event)
+        argument = self._subcommand_argument(event.message_str)
+        await self._handle_size_switch(event, session, argument)
+
+    @nai_group.command("on")
+    async def nai_recall_on(self, event: AstrMessageEvent) -> None:
+        """开启自动撤回。"""
+        session = SessionContext.from_event(event)
+        await self._handle_recall_toggle(event, session, True)
+
+    @nai_group.command("off")
+    async def nai_recall_off(self, event: AstrMessageEvent) -> None:
+        """关闭自动撤回。"""
+        session = SessionContext.from_event(event)
+        await self._handle_recall_toggle(event, session, False)
+
+    @nai_group.command("st")
+    async def nai_admin_on(self, event: AstrMessageEvent) -> None:
+        """开启管理员模式。"""
+        session = SessionContext.from_event(event)
+        await self._handle_admin_mode(event, session, True)
+
+    @nai_group.command("sp")
+    async def nai_admin_off(self, event: AstrMessageEvent) -> None:
+        """关闭管理员模式。"""
+        session = SessionContext.from_event(event)
+        await self._handle_admin_mode(event, session, False)
+
+    @nai_group.command("pt")
+    async def nai_pt(self, event: AstrMessageEvent) -> None:
+        """查看或切换提示词显示。"""
+        session = SessionContext.from_event(event)
+        argument = self._subcommand_argument(event.message_str)
+        await self._handle_prompt_show(event, session, argument)
+
+    @nai_group.command("nsfw")
+    async def nai_nsfw(self, event: AstrMessageEvent) -> None:
+        """查看或切换 NSFW 过滤。"""
+        session = SessionContext.from_event(event)
+        argument = self._subcommand_argument(event.message_str)
+        await self._handle_nsfw(event, session, argument)
+
+    @nai_group.command("撤回")
+    async def nai_recall(self, event: AstrMessageEvent) -> None:
+        """撤回最近一张本插件图片。"""
+        session = SessionContext.from_event(event)
+        await self._handle_recall_last(event, session)
+
+    # ── 独立命令（向后兼容） ──────────────────────────────────
 
     @filter.command("nai0")
     async def nai0(self, event: AstrMessageEvent) -> None:
-        """直接使用英文标签生图。"""
+        """直接使用英文标签生图（/nai tag 的兼容别名）。"""
         session = SessionContext.from_event(event)
         if not can_use_generation(self.config, session, self.states):
             await send_text_message(event, "❌ 当前会话启用了管理员模式，只有管理员可以使用生图命令。")
@@ -140,6 +203,8 @@ class Main(Star):
             )
             return
         await send_text_message(event, result)
+
+    # ── LLM 工具 ─────────────────────────────────────────────
 
     @filter.llm_tool(name="nai_generate_image")
     async def nai_generate_image_tool(self, event: AstrMessageEvent, request: str) -> str:
@@ -176,6 +241,8 @@ class Main(Star):
         if not success:
             return f"图片生成失败：{result}"
         return f"图片已发送。最终提示词：{prompt_result.prompt}"
+
+    # ── 内部处理方法 ──────────────────────────────────────────
 
     async def _handle_draw(
         self,
@@ -301,9 +368,18 @@ class Main(Star):
             section = "model_nai4"
         else:
             section = "model_nai3"
+
+        # 优先使用版本专属预设，为空时回退到全局预设
         presets = parse_artist_presets(
             get_config_value(self.config, f"{section}.artist_presets", [])
         )
+        fallback = False
+        if not presets:
+            presets = parse_artist_presets(
+                get_config_value(self.config, "model.artist_presets", [])
+            )
+            fallback = bool(presets)
+
         if not presets:
             await send_text_message(event, "⚠️ 当前模型没有配置画师预设。")
             return
@@ -326,9 +402,12 @@ class Main(Star):
             return
 
         lines = [f"当前画师预设：#{current_index}"]
+        if fallback:
+            lines.append("（使用全局预设）")
         for index, preset in enumerate(presets, start=1):
             marker = "👉" if index == current_index else "  "
-            lines.append(f"{marker} {index}. {preset.name}")
+            desc_part = f" - {preset.description}" if preset.description else ""
+            lines.append(f"{marker} {index}. {preset.name}{desc_part}")
         await send_text_message(event, "\n".join(lines))
 
     async def _handle_size_switch(
@@ -423,14 +502,19 @@ class Main(Star):
         else:
             await send_text_message(event, "❌ 撤回失败，可能消息已过期或当前平台不支持。")
 
-    @staticmethod
-    def _command_remainder(message: str) -> str:
-        parts = (message or "").strip().split(maxsplit=1)
-        return parts[1].strip() if len(parts) > 1 else ""
+    # ── 辅助方法 ──────────────────────────────────────────────
 
     @staticmethod
-    def _split_remainder(remainder: str) -> tuple[str, str]:
-        parts = remainder.split(maxsplit=1)
-        command = parts[0].strip().lower() if parts else ""
-        argument = parts[1].strip() if len(parts) > 1 else ""
-        return command, argument
+    def _subcommand_argument(message: str) -> str:
+        """提取命令组子命令后的自由文本参数。
+
+        例如 "/nai draw 画一只猫" -> "画一只猫"
+        """
+        parts = (message or "").strip().split(maxsplit=2)
+        return parts[2].strip() if len(parts) > 2 else ""
+
+    @staticmethod
+    def _command_remainder(message: str) -> str:
+        """提取顶级命令后的全部文本（用于 /nai0 等独立命令）。"""
+        parts = (message or "").strip().split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else ""

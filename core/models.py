@@ -11,6 +11,8 @@ from typing import Any
 class ArtistPreset:
     name: str
     prompt: str
+    negative_prompt: str = ""
+    description: str = ""
 
 
 @dataclass(slots=True)
