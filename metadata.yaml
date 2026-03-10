@@ -1,9 +1,9 @@
-name: astrbot_plugin_nai_pic
-display_name: NAI 图片生成
-desc: 基于 NovelAI Web 接口的 AstrBot 图片插件，支持自然语言生图、模型/尺寸切换、打标与撤回。
+name: astrbot_plugin_nai_brush
+display_name: 幻笔-NovelAI
+desc: 基于 NovelAI 的 AI 绘图插件，支持自然语言生图、模型/尺寸切换、打标与撤回。
 version: 1.0.0
 author: 薄暝
-repo: https://github.com/exynos967/astrbot_plugin_nai_pic
+repo: https://github.com/exynos967/astrbot_plugin_nai_brush
 support_platforms:
   - aiocqhttp
 astrbot_version: ">=4.11,<5"

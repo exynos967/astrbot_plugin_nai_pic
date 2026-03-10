@@ -18,11 +18,11 @@ from .core.config import (
     normalize_size_alias,
     parse_artist_presets,
     resolve_model_config,
+    should_show_draw_prompt,
     size_display_name,
 )
 from .core.message_utils import (
     extract_first_reply_image_input,
-    extract_reply_message_id,
     send_text_message,
 )
 from .core.models import SessionContext
@@ -124,49 +124,12 @@ class Main(Star):
         argument = self._subcommand_argument(event.message_str)
         await self._handle_size_switch(event, session, argument)
 
-    @nai_group.command("on")
-    async def nai_recall_on(self, event: AstrMessageEvent) -> None:
-        """开启自动撤回。"""
-        session = SessionContext.from_event(event)
-        await self._handle_recall_toggle(event, session, True)
-
-    @nai_group.command("off")
-    async def nai_recall_off(self, event: AstrMessageEvent) -> None:
-        """关闭自动撤回。"""
-        session = SessionContext.from_event(event)
-        await self._handle_recall_toggle(event, session, False)
-
-    @nai_group.command("st")
-    async def nai_admin_on(self, event: AstrMessageEvent) -> None:
-        """开启管理员模式。"""
-        session = SessionContext.from_event(event)
-        await self._handle_admin_mode(event, session, True)
-
-    @nai_group.command("sp")
-    async def nai_admin_off(self, event: AstrMessageEvent) -> None:
-        """关闭管理员模式。"""
-        session = SessionContext.from_event(event)
-        await self._handle_admin_mode(event, session, False)
-
-    @nai_group.command("pt")
-    async def nai_pt(self, event: AstrMessageEvent) -> None:
-        """查看或切换提示词显示。"""
-        session = SessionContext.from_event(event)
-        argument = self._subcommand_argument(event.message_str)
-        await self._handle_prompt_show(event, session, argument)
-
     @nai_group.command("nsfw")
     async def nai_nsfw(self, event: AstrMessageEvent) -> None:
         """查看或切换 NSFW 过滤。"""
         session = SessionContext.from_event(event)
         argument = self._subcommand_argument(event.message_str)
         await self._handle_nsfw(event, session, argument)
-
-    @nai_group.command("撤回")
-    async def nai_recall(self, event: AstrMessageEvent) -> None:
-        """撤回最近一张本插件图片。"""
-        session = SessionContext.from_event(event)
-        await self._handle_recall_last(event, session)
 
     # ── 独立命令（向后兼容） ──────────────────────────────────
 
@@ -265,7 +228,7 @@ class Main(Star):
             await send_text_message(event, "❌ 提示词生成失败，请确认当前会话有可用的聊天模型。")
             return
 
-        if is_prompt_show_enabled(self.config, session, self.states):
+        if should_show_draw_prompt(self.config, session, self.states):
             await send_text_message(event, f"📝 提示词：\n{prompt_result.display_prompt}")
 
         success, result = await self.image_service.generate_and_send(
@@ -279,43 +242,6 @@ class Main(Star):
 
         if get_config_value(self.config, "components.enable_debug_info", False):
             await send_text_message(event, "✅ 图片生成完成。")
-
-    async def _handle_recall_toggle(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        enabled: bool,
-    ) -> None:
-        if not is_plugin_admin(self.config, session):
-            await send_text_message(event, "❌ 只有插件管理员可以切换自动撤回。")
-            return
-
-        self.states.get(session).recall_enabled = enabled
-        delay = int(get_config_value(self.config, "auto_recall.delay_seconds", 5) or 5)
-        if enabled:
-            await send_text_message(
-                event,
-                f"✅ 已开启自动撤回。当前会话中本插件发出的图片将在 {delay} 秒后自动撤回。",
-            )
-        else:
-            await send_text_message(event, "✅ 已关闭自动撤回。")
-
-    async def _handle_admin_mode(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        enabled: bool,
-    ) -> None:
-        if not is_plugin_admin(self.config, session):
-            await send_text_message(event, "❌ 只有插件管理员可以切换管理员模式。")
-            return
-        self.states.get(session).admin_mode = enabled
-        await send_text_message(
-            event,
-            "✅ 已开启 NAI 插件管理员模式。"
-            if enabled
-            else "✅ 已关闭 NAI 插件管理员模式。",
-        )
 
     async def _handle_model_switch(
         self,
@@ -440,22 +366,6 @@ class Main(Star):
         )
         await send_text_message(event, "\n".join(lines))
 
-    async def _handle_prompt_show(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        argument: str,
-    ) -> None:
-        if argument not in {"on", "off"}:
-            enabled = is_prompt_show_enabled(self.config, session, self.states)
-            await send_text_message(event, f"当前提示词显示：{'开启' if enabled else '关闭'}")
-            return
-        self.states.get(session).prompt_show_enabled = argument == "on"
-        await send_text_message(
-            event,
-            "✅ 已开启提示词显示。" if argument == "on" else "✅ 已关闭提示词显示。",
-        )
-
     async def _handle_nsfw(
         self,
         event: AstrMessageEvent,
@@ -479,28 +389,6 @@ class Main(Star):
             event,
             "✅ 已开启 NSFW 过滤。" if argument == "on" else "✅ 已关闭 NSFW 过滤。",
         )
-
-    async def _handle_recall_last(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-    ) -> None:
-        self.states.prune_expired_images(session, 24 * 3600)
-        reply_message_id = extract_reply_message_id(event)
-        target = (
-            self.states.find_recent_image(session, reply_message_id)
-            if reply_message_id
-            else self.states.latest_image(session)
-        )
-        if target is None:
-            await send_text_message(event, "❌ 找不到可撤回的本插件图片。")
-            return
-
-        success = await self.image_service.delete_message(event, target.message_id)
-        if success:
-            await send_text_message(event, "✅ 已撤回。")
-        else:
-            await send_text_message(event, "❌ 撤回失败，可能消息已过期或当前平台不支持。")
 
     # ── 辅助方法 ──────────────────────────────────────────────
 

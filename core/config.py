@@ -163,6 +163,16 @@ def is_prompt_show_enabled(
     return bool(get_config_value(config, "prompt_show.enabled", False))
 
 
+def should_show_draw_prompt(
+    config: dict[str, Any],
+    session: SessionContext,
+    states: SessionStateStore,
+) -> bool:
+    if not bool(get_config_value(config, "prompt_show.draw_output_enabled", True)):
+        return False
+    return is_prompt_show_enabled(config, session, states)
+
+
 def is_recall_enabled(
     config: dict[str, Any],
     session: SessionContext,
@@ -263,11 +273,7 @@ def build_help_text(config: dict[str, Any]) -> str:
             "/nai set [模型代号]：查看或切换模型",
             "/nai art [编号]：查看或切换画师预设",
             "/nai size [尺寸]：查看或切换尺寸",
-            "/nai on|off：切换自动撤回",
-            "/nai 撤回：撤回最近一张本插件图片",
-            "/nai pt on|off：切换提示词显示",
             "/nai nsfw [on|off]：查看或切换 NSFW 过滤",
-            "/nai st|sp：切换插件管理员模式",
             "/打标：引用回复图片进行打标",
             f"当前默认模型：{model_display_name(base_model) if base_model else '未配置'}",
         ]

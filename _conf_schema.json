@@ -579,7 +579,7 @@
       "default_admin_mode": {
         "type": "bool",
         "description": "默认管理员模式",
-        "hint": "开启后新会话默认只有管理员可以使用生图命令，可通过 /nai st|sp 临时切换",
+        "hint": "开启后新会话默认只有管理员可以使用生图命令",
         "default": false
       }
     }
@@ -591,7 +591,7 @@
       "enabled": {
         "type": "bool",
         "description": "默认启用自动撤回",
-        "hint": "开启后本插件发送的图片会在指定时间后自动撤回，可通过 /nai on|off 临时切换",
+        "hint": "开启后本插件发送的图片会在指定时间后自动撤回",
         "default": false
       },
       "delay_seconds": {
@@ -635,6 +635,12 @@
         "description": "默认展示最终提示词",
         "hint": "开启后每次生图前会发送最终使用的提示词，方便调试和学习",
         "default": false
+      },
+      "draw_output_enabled": {
+        "type": "bool",
+        "description": "draw 命令提示词输出开关",
+        "hint": "控制 /nai draw 是否允许输出提示词；关闭后不会输出提示词",
+        "default": true
       },
       "hide_selfie_prompt_add": {
         "type": "bool",
