@@ -6,12 +6,11 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .core.clients import DanbooruClient, NaiWebClient
+from .core.clients import NaiWebClient
 from .core.config import (
     build_help_text,
     can_use_generation,
     get_config_value,
-    is_artist_preview_enabled,
     is_plugin_admin,
     is_prompt_show_enabled,
     model_display_name,
@@ -28,7 +27,6 @@ from .core.message_utils import (
 )
 from .core.models import SessionContext
 from .core.services import (
-    ArtistGeneratorService,
     ImageService,
     LLMService,
     PromptGeneratorService,
@@ -56,27 +54,17 @@ class Main(Star):
 
         self.states = SessionStateStore()
         self.nai_client = NaiWebClient()
-        self.danbooru_client = DanbooruClient(
-            timeout=int(get_config_value(self.config, "artist_generator.search_timeout", 15) or 15)
-        )
         self.llm_service = LLMService(self.context, self.config)
         self.prompt_service = PromptGeneratorService(
             self.config,
             self.states,
             self.llm_service,
         )
-        self.artist_service = ArtistGeneratorService(
-            self.config,
-            self.states,
-            self.llm_service,
-            self.danbooru_client,
-        )
         self.tagger_service = TaggerService(self.config, self.llm_service)
         self.image_service = ImageService(self.config, self.states, self.nai_client)
 
     async def terminate(self) -> None:
         await self.nai_client.close()
-        await self.danbooru_client.close()
 
     @filter.command("nai")
     async def nai(self, event: AstrMessageEvent) -> None:
@@ -112,18 +100,6 @@ class Main(Star):
             return
         if command == "nsfw":
             await self._handle_nsfw(event, session, argument)
-            return
-        if command == "artgen":
-            await self._handle_artgen(event, session, argument)
-            return
-        if command == "artr":
-            await self._handle_art_random(event, session)
-            return
-        if command == "artfix":
-            await self._handle_artfix(event, session, argument)
-            return
-        if command == "artpv":
-            await self._handle_art_preview_toggle(event, session, argument)
             return
         if command == "撤回":
             await self._handle_recall_last(event, session)
@@ -425,79 +401,6 @@ class Main(Star):
             "✅ 已开启 NSFW 过滤。" if argument == "on" else "✅ 已关闭 NSFW 过滤。",
         )
 
-    async def _handle_artgen(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        argument: str,
-    ) -> None:
-        if not can_use_generation(self.config, session, self.states):
-            await send_text_message(event, "❌ 当前会话启用了管理员模式，只有管理员可以使用画师串生成。")
-            return
-        if not argument:
-            await send_text_message(event, "用法：/nai artgen <风格描述>")
-            return
-        artist_prompt = await self.artist_service.generate(event, session, argument)
-        if not artist_prompt:
-            await send_text_message(event, "❌ 画师串生成失败，请尝试更具体的风格描述。")
-            return
-        await send_text_message(event, f"{artist_prompt}\n\n💡 使用 /nai artfix <反馈> 可继续优化。")
-        await self._maybe_send_preview(event, session, artist_prompt)
-
-    async def _handle_art_random(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-    ) -> None:
-        if not can_use_generation(self.config, session, self.states):
-            await send_text_message(event, "❌ 当前会话启用了管理员模式，只有管理员可以使用画师串生成。")
-            return
-        artist_prompt = await self.artist_service.generate(
-            event,
-            session,
-            "随机风格",
-            random_mode=True,
-        )
-        if not artist_prompt:
-            await send_text_message(event, "❌ 随机画师串生成失败。")
-            return
-        await send_text_message(event, f"{artist_prompt}\n\n💡 使用 /nai artfix <反馈> 可继续优化。")
-        await self._maybe_send_preview(event, session, artist_prompt)
-
-    async def _handle_artfix(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        argument: str,
-    ) -> None:
-        if not argument:
-            await send_text_message(event, "用法：/nai artfix <反馈>")
-            return
-        artist_prompt = await self.artist_service.fix(event, session, argument)
-        if not artist_prompt:
-            await send_text_message(event, "❌ 没有可优化的上一条画师串，或反馈无法生成新候选。")
-            return
-        await send_text_message(event, f"{artist_prompt}\n\n💡 继续使用 /nai artfix <反馈> 可进一步优化。")
-        await self._maybe_send_preview(event, session, artist_prompt)
-
-    async def _handle_art_preview_toggle(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        argument: str,
-    ) -> None:
-        if argument not in {"on", "off"}:
-            enabled = is_artist_preview_enabled(self.config, session, self.states)
-            await send_text_message(event, f"当前画师串预览图模式：{'开启' if enabled else '关闭'}")
-            return
-        self.states.get(session).artist_preview_enabled = argument == "on"
-        await send_text_message(
-            event,
-            "✅ 已开启画师串预览图模式。"
-            if argument == "on"
-            else "✅ 已关闭画师串预览图模式。",
-        )
-
     async def _handle_recall_last(
         self,
         event: AstrMessageEvent,
@@ -519,31 +422,6 @@ class Main(Star):
             await send_text_message(event, "✅ 已撤回。")
         else:
             await send_text_message(event, "❌ 撤回失败，可能消息已过期或当前平台不支持。")
-
-    async def _maybe_send_preview(
-        self,
-        event: AstrMessageEvent,
-        session: SessionContext,
-        artist_prompt: str,
-    ) -> None:
-        if not is_artist_preview_enabled(self.config, session, self.states):
-            return
-
-        preview_prompt = await self.artist_service.generate_preview_prompt(event, artist_prompt)
-        if not preview_prompt:
-            await send_text_message(event, "⚠️ 画师串已生成，但预览构图生成失败。")
-            return
-
-        model_config = resolve_model_config(self.config, session, self.states)
-        model_config = {**model_config, "nai_artist_prompt": artist_prompt}
-        success, result = await self.image_service.generate_and_send(
-            event,
-            session,
-            preview_prompt,
-            model_config_override=model_config,
-        )
-        if not success:
-            await send_text_message(event, f"⚠️ 画师串已生成，但预览图失败：{result}")
 
     @staticmethod
     def _command_remainder(message: str) -> str:

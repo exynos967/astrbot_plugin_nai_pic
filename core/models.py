@@ -61,8 +61,6 @@ class SessionRuntimeState:
     recall_enabled: bool | None = None
     nsfw_filter_enabled: bool | None = None
     prompt_show_enabled: bool | None = None
-    artist_preview_enabled: bool | None = None
-    last_artist_prompt: str | None = None
     recent_images: deque[RecentImageRecord] = field(
         default_factory=lambda: deque(maxlen=20)
     )

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import re
 from typing import Any
 
 from astrbot.api import logger
 
-from .clients import DanbooruClient, NaiWebClient, extract_artist_names_from_prompt
+from .clients import NaiWebClient
 from .config import (
     get_config_value,
     get_session_provider_id,
     is_recall_enabled,
-    model_display_name,
     recall_is_allowed_in_session,
     resolve_model_config,
 )
@@ -22,20 +20,12 @@ from .message_utils import delete_onebot_message, send_image_message, sleep_and_
 from .models import PromptBuildResult, SessionContext
 from .session_state import SessionStateStore
 from .templates import (
-    ARTIST_FIX_FROM_POOL_TEMPLATE,
-    ARTIST_FROM_POOL_TEMPLATE,
-    EXTRACT_FEEDBACK_TAGS_TEMPLATE,
-    EXTRACT_TAGS_TEMPLATE,
-    PREVIEW_COMPOSITION_TEMPLATE,
     PROMPT_GENERATOR_JSON_TEMPLATE,
     PROMPT_GENERATOR_TEMPLATE,
-    RANDOM_TAG_CATEGORIES,
     SFW_PROMPT_GENERATOR_JSON_TEMPLATE,
     SFW_PROMPT_GENERATOR_TEMPLATE,
     TAGGER_PROMPT_TEMPLATE,
-    cleanup_artist_prompt,
     detect_selfie_from_output,
-    format_candidate_pool,
     get_selfie_hint,
     merge_selfie_prompt,
 )
@@ -163,7 +153,7 @@ class PromptGeneratorService:
             event,
             prompt=prompt,
             provider_path="prompt_generator.provider_id",
-            fallback_paths=("artist_generator.provider_id",),
+            fallback_paths=("prompt_generator.chat_provider_id",),
             temperature=float(
                 get_config_value(self.config, "prompt_generator.temperature", 0.2) or 0.2
             ),
@@ -276,279 +266,6 @@ class PromptGeneratorService:
                 user_specified,
             )
         return prompt
-
-
-class ArtistGeneratorService:
-    def __init__(
-        self,
-        config: dict[str, Any],
-        states: SessionStateStore,
-        llm_service: LLMService,
-        danbooru_client: DanbooruClient,
-    ) -> None:
-        self.config = config
-        self.states = states
-        self.llm = llm_service
-        self.danbooru = danbooru_client
-
-    async def generate(
-        self,
-        event: Any,
-        session: SessionContext,
-        style: str,
-        *,
-        random_mode: bool = False,
-    ) -> str | None:
-        model_name = resolve_model_config(self.config, session, self.states).get(
-            "default_model",
-            "",
-        )
-        model_version = model_display_name(str(model_name))
-
-        if random_mode:
-            categories = random.sample(
-                list(RANDOM_TAG_CATEGORIES.keys()),
-                k=random.randint(2, 4),
-            )
-            search_tags = [random.choice(RANDOM_TAG_CATEGORIES[key]) for key in categories]
-            target_artist = None
-        else:
-            search_tags = await self._extract_search_tags(event, style)
-            target_artist = None
-            if search_tags and search_tags[0].startswith("@"):
-                target_artist = search_tags[0][1:]
-                search_tags = []
-
-        if not search_tags and not target_artist:
-            return None
-
-        if target_artist:
-            candidates = await self._search_similar_artists(target_artist)
-        else:
-            candidates = await self.danbooru.search_artists_by_tags(search_tags, 150, 2)
-            if len(candidates) < 5:
-                merged = {artist["name"].lower(): artist for artist in candidates}
-                for tag in search_tags:
-                    for artist in await self.danbooru.search_artists_by_tags([tag], 100, 2):
-                        merged.setdefault(artist["name"].lower(), artist)
-                candidates = list(merged.values())
-            if len(candidates) < 5:
-                candidates = await self.danbooru.search_artists_by_tags(["1girl"], 150, 2)
-
-        if not candidates:
-            return None
-
-        if random_mode and len(candidates) > 30:
-            random.shuffle(candidates)
-            candidates = candidates[: random.randint(30, min(60, len(candidates)))]
-
-        prompt = ARTIST_FROM_POOL_TEMPLATE.replace(
-            "<<USER_REQUEST>>",
-            style if not random_mode else "随机风格",
-        )
-        prompt = prompt.replace("<<MODEL_VERSION>>", model_version)
-        prompt = prompt.replace("<<CANDIDATE_ARTISTS>>", format_candidate_pool(candidates))
-        prompt = prompt.replace(
-            "<<EXTRA_HINT>>",
-            "【随机模式】请随机挑一个有趣风格方向进行组合。" if random_mode else "",
-        )
-
-        response = await self.llm.generate(
-            event,
-            prompt=prompt,
-            provider_path="artist_generator.provider_id",
-            fallback_paths=("prompt_generator.provider_id",),
-            temperature=float(
-                get_config_value(
-                    self.config,
-                    "artist_generator.random_temperature" if random_mode else "artist_generator.temperature",
-                    0.7 if random_mode else 0.3,
-                )
-                or (0.7 if random_mode else 0.3)
-            ),
-            max_tokens=int(
-                get_config_value(self.config, "artist_generator.max_tokens", 300) or 300
-            ),
-        )
-        if not response:
-            return None
-
-        cleaned = cleanup_artist_prompt(response)
-        if not cleaned:
-            return None
-
-        self.states.get(session).last_artist_prompt = cleaned
-        return cleaned
-
-    async def fix(
-        self,
-        event: Any,
-        session: SessionContext,
-        feedback: str,
-    ) -> str | None:
-        original_prompt = self.states.get(session).last_artist_prompt
-        if not original_prompt:
-            return None
-
-        model_name = resolve_model_config(self.config, session, self.states).get(
-            "default_model",
-            "",
-        )
-        model_version = model_display_name(str(model_name))
-
-        feedback_tags = await self._extract_feedback_tags(event, feedback)
-        original_artists = extract_artist_names_from_prompt(original_prompt)
-
-        expanded_pool: dict[str, dict[str, Any]] = {}
-        for name in original_artists:
-            info = await self.danbooru.search_artist(name)
-            if not info or int(info.get("post_count") or 0) <= 0:
-                continue
-            style_info = await self.danbooru.get_artist_style_tags(name, 15)
-            expanded_pool[name.lower()] = {
-                "name": str(info.get("name") or name),
-                "post_count": int(info.get("post_count") or 0),
-                "style_tags": style_info.get("common_tags", [])[:6],
-            }
-
-        for artist in await self.danbooru.search_artists_by_tags(feedback_tags, 100, 2):
-            expanded_pool.setdefault(artist["name"].lower(), artist)
-
-        if len(expanded_pool) < 3:
-            return None
-
-        prompt = ARTIST_FIX_FROM_POOL_TEMPLATE.replace(
-            "<<ORIGINAL_PROMPT>>",
-            original_prompt,
-        )
-        prompt = prompt.replace("<<USER_FEEDBACK>>", feedback)
-        prompt = prompt.replace("<<MODEL_VERSION>>", model_version)
-        prompt = prompt.replace(
-            "<<CANDIDATE_ARTISTS>>",
-            format_candidate_pool(list(expanded_pool.values())),
-        )
-        response = await self.llm.generate(
-            event,
-            prompt=prompt,
-            provider_path="artist_generator.provider_id",
-            fallback_paths=("prompt_generator.provider_id",),
-            temperature=float(
-                get_config_value(self.config, "artist_generator.temperature", 0.3) or 0.3
-            ),
-            max_tokens=int(
-                get_config_value(self.config, "artist_generator.max_tokens", 300) or 300
-            ),
-        )
-        if not response:
-            return None
-
-        cleaned = cleanup_artist_prompt(response)
-        if not cleaned:
-            return None
-        self.states.get(session).last_artist_prompt = cleaned
-        return cleaned
-
-    async def generate_preview_prompt(self, event: Any, artist_prompt: str) -> str | None:
-        prompt = PREVIEW_COMPOSITION_TEMPLATE.replace("<<ARTIST_PROMPT>>", artist_prompt)
-        response = await self.llm.generate(
-            event,
-            prompt=prompt,
-            provider_path="artist_generator.provider_id",
-            fallback_paths=("prompt_generator.provider_id",),
-            temperature=0.3,
-            max_tokens=120,
-        )
-        return cleanup_artist_prompt(response) if response else None
-
-    async def _extract_search_tags(self, event: Any, user_request: str) -> list[str]:
-        prompt = EXTRACT_TAGS_TEMPLATE.replace("<<USER_REQUEST>>", user_request)
-        response = await self.llm.generate(
-            event,
-            prompt=prompt,
-            provider_path="artist_generator.provider_id",
-            fallback_paths=("prompt_generator.provider_id",),
-            temperature=0.2,
-            max_tokens=60,
-        )
-        if not response:
-            return []
-
-        cleaned = response.strip()
-        if cleaned.startswith("@"):
-            artist_name = cleaned.lstrip("@").strip().lower().replace(" ", "_")
-            return [f"@{artist_name}"] if artist_name else []
-
-        raw_tags = [
-            part.strip(",.;:!?")
-            for part in cleaned.lower().split()
-            if part.strip(",.;:!?")
-        ][:6]
-        if not raw_tags:
-            return []
-        validated = await self.danbooru.validate_and_correct_tags(raw_tags)
-        return validated or raw_tags[:2]
-
-    async def _extract_feedback_tags(self, event: Any, feedback: str) -> list[str]:
-        prompt = EXTRACT_FEEDBACK_TAGS_TEMPLATE.replace("<<USER_FEEDBACK>>", feedback)
-        response = await self.llm.generate(
-            event,
-            prompt=prompt,
-            provider_path="artist_generator.provider_id",
-            fallback_paths=("prompt_generator.provider_id",),
-            temperature=0.2,
-            max_tokens=60,
-        )
-        if not response:
-            return []
-        raw_tags = [
-            part.strip(",.;:!?")
-            for part in response.lower().split()
-            if part.strip(",.;:!?")
-        ][:6]
-        return await self.danbooru.validate_and_correct_tags(raw_tags) or raw_tags[:2]
-
-    async def _search_similar_artists(self, artist_name: str) -> list[dict[str, Any]]:
-        target_info = await self.danbooru.search_artist(artist_name)
-        if target_info is None:
-            fuzzy = await self.danbooru.fuzzy_search_artist(artist_name, 1)
-            if not fuzzy:
-                return []
-            target_info = fuzzy[0]
-            artist_name = str(target_info.get("name") or artist_name)
-
-        style_info = await self.danbooru.get_artist_style_tags(artist_name, 20)
-        candidates: dict[str, dict[str, Any]] = {
-            artist_name.lower(): {
-                "name": artist_name,
-                "post_count": int(target_info.get("post_count") or 0),
-                "style_tags": style_info.get("common_tags", [])[:6],
-            }
-        }
-
-        related = await self.danbooru.get_related_artists(artist_name, 15)
-        for item in related:
-            tag_info = item.get("tag", item)
-            related_name = str(tag_info.get("name") or "").strip()
-            if not related_name:
-                continue
-            related_info = await self.danbooru.search_artist(related_name)
-            if not related_info:
-                continue
-            post_count = int(related_info.get("post_count") or 0)
-            if post_count < 100:
-                continue
-            candidates.setdefault(
-                related_name.lower(),
-                {"name": related_name, "post_count": post_count, "style_tags": []},
-            )
-
-        style_tags = style_info.get("common_tags", [])[:3]
-        if style_tags and len(candidates) < 20:
-            for artist in await self.danbooru.search_artists_by_tags(style_tags, 50, 2):
-                candidates.setdefault(artist["name"].lower(), artist)
-                if len(candidates) >= 30:
-                    break
-        return list(candidates.values())
 
 
 class TaggerService:

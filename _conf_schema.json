@@ -353,43 +353,6 @@
       }
     }
   },
-  "artist_generator": {
-    "type": "object",
-    "description": "画师串生成配置",
-    "items": {
-      "provider_id": {
-        "type": "string",
-        "description": "画师串生成使用的 provider ID，留空则复用 prompt_generator.provider_id 或当前会话",
-        "default": "",
-        "_special": "select_provider"
-      },
-      "temperature": {
-        "type": "float",
-        "description": "画师串生成温度",
-        "default": 0.3
-      },
-      "random_temperature": {
-        "type": "float",
-        "description": "随机画师串生成温度",
-        "default": 0.7
-      },
-      "max_tokens": {
-        "type": "int",
-        "description": "画师串生成最大 tokens",
-        "default": 300
-      },
-      "auto_preview": {
-        "type": "bool",
-        "description": "默认是否启用画师串预览图模式",
-        "default": false
-      },
-      "search_timeout": {
-        "type": "int",
-        "description": "Danbooru 搜索超时（秒）",
-        "default": 15
-      }
-    }
-  },
   "tagger": {
     "type": "object",
     "description": "图片打标配置",

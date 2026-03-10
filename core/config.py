@@ -174,17 +174,6 @@ def is_nsfw_filter_enabled(
     return bool(get_config_value(config, "nsfw_filter.enabled", False))
 
 
-def is_artist_preview_enabled(
-    config: dict[str, Any],
-    session: SessionContext,
-    states: SessionStateStore,
-) -> bool:
-    state = states.get(session)
-    if state.artist_preview_enabled is not None:
-        return state.artist_preview_enabled
-    return bool(get_config_value(config, "artist_generator.auto_preview", False))
-
-
 def recall_is_allowed_in_session(config: dict[str, Any], session: SessionContext) -> bool:
     allowed_groups = get_config_value(config, "auto_recall.allowed_groups", [])
     if not isinstance(allowed_groups, list) or not allowed_groups:
@@ -252,10 +241,6 @@ def build_help_text(config: dict[str, Any]) -> str:
             "/nai set [模型代号]：查看或切换模型",
             "/nai art [编号]：查看或切换画师预设",
             "/nai size [尺寸]：查看或切换尺寸",
-            "/nai artgen <风格描述>：生成画师串",
-            "/nai artr：随机生成画师串",
-            "/nai artfix <反馈>：迭代优化上一条画师串",
-            "/nai artpv on|off：切换画师串预览图模式",
             "/nai on|off：切换自动撤回",
             "/nai 撤回：撤回最近一张本插件图片",
             "/nai pt on|off：切换提示词显示",
